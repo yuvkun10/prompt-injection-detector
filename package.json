@@ -1,0 +1,46 @@
+{
+  "name": "prompt-injection-detector",
+  "version": "0.1.0",
+  "description": "Layered detector for prompt-injection and jailbreak attempts in LLM inputs, usable as a library, an HTTP API, and a CLI.",
+  "type": "module",
+  "license": "MIT",
+  "author": "yuvkun10",
+  "repository": { "type": "git", "url": "git+https://github.com/yuvkun10/prompt-injection-detector.git" },
+  "keywords": ["prompt-injection", "jailbreak", "llm-security", "guardrails", "security"],
+  "engines": { "node": ">=20" },
+  "packageManager": "pnpm@10.33.2",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": { "pid": "./dist/cli.js" },
+  "exports": { ".": { "types": "./dist/index.d.ts", "import": "./dist/index.js" } },
+  "files": ["dist"],
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch src/cli.ts",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:cov": "vitest run --coverage",
+    "api": "tsx src/server.ts"
+  },
+  "dependencies": {
+    "commander": "^13.0.0",
+    "fastify": "^5.2.0"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "@vitest/coverage-v8": "^2.1.8",
+    "eslint": "^9.17.0",
+    "prettier": "^3.4.2",
+    "tsup": "^8.3.5",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.18.1",
+    "vitest": "^2.1.8"
+  }
+}
