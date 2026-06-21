@@ -1,0 +1,70 @@
+%% Prompt-injection-detector: full detection pipeline (raw input -> verdict).
+%% Source of truth: src/detector.ts, src/normalize.ts, src/decode.ts,
+%% src/rules.ts, src/detectors.ts, src/score.ts, src/llm/provider.ts.
+%% Entry points: detect(text, config) and createDetector(config).detect(text).
+flowchart TD
+    raw["Raw input text"] --> detect["createDetector(config).detect(text)"]
+
+    detect --> prep
+
+    subgraph prep["Preprocessing (per call)"]
+        direction TB
+        norm["normalize(text):
+        NFKC -> strip zero-width / bidi / Tag block / combining marks
+        -> fold confusables -> collapse whitespace -> trim -> lowercase"]
+        dec["decodeLayers(text):
+        whole-text rot13, plus per-token base64 / hex / url / decimal-charcodes
+        (printable-ASCII gated, deduped)"]
+    end
+
+    norm --> ctx
+    dec --> ctx
+    raw --> ctx
+
+    ctx["DetectorContext { original, normalized, decoded[] }"]
+
+    ctx --> run
+
+    subgraph run["Detector set (default; each run isolated in try/catch)"]
+        direction TB
+        pat["createPatternDetector(defaultRules):
+        match phrases against normalized text and each
+        normalize(decoded layer); regexes against original"]
+        obf["obfuscationDetector:
+        count confusables + zero-width vs total in original"]
+        enc["encodingAnomalyDetector:
+        flag decoded layers that reveal hidden payloads"]
+    end
+
+    pat --> collect
+    obf --> collect
+    enc --> collect
+
+    collect["Collect DetectionSignal[]
+    (each evidence truncated to maxEvidenceLength, default 120)"]
+
+    collect --> agg1["aggregate(signals, thresholds):
+    score = round(100 * (1 - product(1 - s_i)))
+    severity = max(band, signal severities)
+    verdict via thresholds (default flag>=35, block>=70)"]
+
+    agg1 --> band{"judge configured AND
+    judgeBand.low <= score <= judgeBand.high?
+    (default 25..70)"}
+
+    band -- "no" --> result
+    band -- "yes" --> judge["consultJudge(judge, text):
+    await judge.judge(text); errors -> null (abstain)"]
+
+    judge --> jres{"opinion != null?"}
+    jres -- "no" --> result
+    jres -- "yes" --> addsig["append external-judge signal
+    (score, rationale, source='judge')"]
+    addsig --> agg2["re-aggregate(signals, thresholds)"]
+    agg2 --> result
+
+    result["DetectionResult {
+    verdict, score, severity,
+    signals[], length, decoded[], elapsedMs }"]
+
+    result --> out["Verdict: allow | flag | block"]
