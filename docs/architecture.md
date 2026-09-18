@@ -56,7 +56,7 @@ Two contracts here are load-bearing:
   interface has no `Promise` in it by design (see "Why detectors are pure and
   synchronous").
 - `LlmJudge.judge(text)` returns `Promise<{ score; rationale } | null>`. Returning
-  `null` means "abstain" — it is a first-class outcome, not an error.
+  `null` means "abstain", it is a first-class outcome, not an error.
 
 ### `normalize.ts`
 
@@ -72,7 +72,7 @@ styles) happens before the explicit confusable map, minimizing how many entries
 that map must carry. `BUILTIN_CONFUSABLES` then handles cross-script look-alikes
 that NFKC deliberately does not fold (Cyrillic/Greek/Armenian homoglyphs) plus
 leetspeak digit and symbol substitutions. `stripZeroWidth` removes zero-width and
-bidi-control characters, the invisible Unicode Tag block (U+E0000–E007F), and
+bidi-control characters, the invisible Unicode Tag block (U+E0000 to U+E007F), and
 combining marks (so Zalgo-stacked text reduces to base letters).
 
 Every function guards its body in `try/catch` and short-circuits on empty input,
@@ -137,7 +137,7 @@ Both are pure, synchronous `Detector` values.
 
 `aggregate(signals, thresholds)` combines the per-signal confidences with a
 **probabilistic OR**: `score = 1 - product(1 - clamp(s_i))`, scaled to `[0,100]`.
-This treats signals as independent evidence — many weak signals accumulate, the
+This treats signals as independent evidence, many weak signals accumulate, the
 result stays bounded, and no single signal saturates the score the way a plain
 sum would. The reported `severity` is the higher of the score-derived band
 (`scoreToSeverity`) and the maximum per-signal severity, so a single `critical`
@@ -193,7 +193,7 @@ the `DetectionResult` as JSON.
 
 `cli.ts` exposes `pid scan`. It resolves input in priority order (positional
 argument, then `--file`, then stdin), parses `--flag-threshold`/`--block-threshold`
-onto a 0–100 scale, prints either a human report or `--json`, and exits with a
+onto a 0 to 100 scale, prints either a human report or `--json`, and exits with a
 verdict-mapped code (`allow` 0, `flag` 1, `block` 2) so the result composes in
 shell pipelines.
 
@@ -263,7 +263,7 @@ reliability profiles:
 - **Offline core** (normalize, decode, rules, heuristics, aggregate) is pure,
   synchronous, deterministic, and free. It runs with no network and no secrets,
   and it is the only thing that runs for the overwhelming majority of inputs.
-- **External judge** is an injected `LlmJudge` — slow, billable, non-deterministic,
+- **External judge** is an injected `LlmJudge`, slow, billable, non-deterministic,
   and able to fail. It is inverted out of the core: the core depends on the
   `LlmJudge` interface, not on any concrete provider, and `resolveJudge` decides
   at the edge whether a real provider is wired in at all.
@@ -297,11 +297,65 @@ is a deliberate constraint, and it follows from the constraints above:
   synchronous `try/catch`. A faulty detector returns `[]` and the others are
   unaffected. There is no partially-resolved async state to reason about.
 - **No IO in the inner loop.** Keeping detectors synchronous prevents accidental
-  IO from creeping into the per-input hot path. The single sanctioned point of IO
-  — the LLM judge — is held outside the detector set and handled explicitly in
+  IO from creeping into the per-input hot path. The single sanctioned point of IO,
+  the LLM judge, is held outside the detector set and handled explicitly in
   `detector.ts`, under the band and fail-safe rules above. The core's only `async`
   is the orchestration of that one optional call.
 
 In short: detectors are the deterministic, side-effect-free substrate; all
 non-determinism and IO are concentrated in one inverted, optional, fail-safe
 dependency.
+
+## Pipeline overview by stage
+
+This section moved here from the README on 19 Sep 2026. It is the short version of the module map above.
+
+Each input passes through a fixed pipeline. Normalization and decoding produce a `DetectorContext`; every detector reads that context and emits zero or more signals; the signals are aggregated into a score and verdict; and only then, for borderline scores, an optional judge may be consulted.
+
+```mermaid
+flowchart TD
+    input["Raw input text"] --> normalize["normalize(): NFKC, strip zero-width and<br/>combining marks, fold confusables,<br/>collapse whitespace, lowercase"]
+    input --> decode["decodeLayers(): rot13, base64, hex,<br/>URL, decimal char codes"]
+    normalize --> ctx["DetectorContext<br/>(original, normalized, decoded)"]
+    decode --> ctx
+    ctx --> pattern["Pattern detector:<br/>phrases vs normalized + decoded layers,<br/>regexes vs original"]
+    ctx --> obf["Obfuscation detector:<br/>confusable / invisible char ratio"]
+    ctx --> enc["Encoding-anomaly detector:<br/>hidden payload in a decode layer"]
+    pattern --> signals["Signals"]
+    obf --> signals
+    enc --> signals
+    signals --> aggregate["aggregate(): probabilistic OR<br/>of signal confidences to 0-100,<br/>map to verdict via thresholds"]
+    aggregate --> band{"score within<br/>judge band and<br/>judge configured?"}
+    band -- no --> result["DetectionResult"]
+    band -- yes --> judge["LLM judge<br/>(adds external-judge signal)"]
+    judge --> reaggregate["re-aggregate"]
+    reaggregate --> result
+```
+
+Diagram source: [architecture.mmd](architecture.mmd). The fuller diagram is [diagrams/pipeline.mmd](diagrams/pipeline.mmd).
+
+#### Normalize
+
+`normalize` canonicalizes the input so string matchers see one stable form regardless of disguise: NFKC normalization, then removal of zero-width / bidi-control / Unicode Tag-block / combining-mark characters, then folding of cross-script look-alikes and leetspeak substitutions to ASCII (the explicit map is `BUILTIN_CONFUSABLES`), then whitespace-run collapse, trim, and lowercase. Every normalization function is total and never throws.
+
+#### Decode
+
+`decodeLayers` surfaces payloads hidden behind reversible transforms. It always produces a whole-text rot13 layer, then scans candidate token spans and attempts base64, hex, URL-encoding, and decimal-char-code decoders. Each decoder is conservative: it validates the charset, caps decoded size, and only accepts output that is mostly printable ASCII, so binary garbage is not surfaced as a layer.
+
+#### Detectors
+
+The default detector set is three detectors:
+
+- **Pattern detector** (`createPatternDetector(defaultRules)`): the bulk of detection. It matches a catalog of phrase rules against the normalized text and against each decoded layer (re-normalized), and matches rule regexes against the untouched original. Rules span instruction-override, role-confusion, system-exfiltration, delimiter-injection, refusal-suppression, data-exfiltration, code-execution, and obfuscation categories, including multilingual variants. At most one signal is emitted per (rule, source) pair.
+- **Obfuscation detector**: flags inputs whose visible characters were materially disguised, scoring on the fraction of confusable look-alikes plus the count of invisible characters in the original.
+- **Encoding-anomaly detector**: fires when a non-rot13 decode layer surfaced substantial, mostly-printable text that is not already present verbatim in the original, i.e. genuinely smuggled content.
+
+Each detector runs in isolation: if one throws, its output is dropped and the others still run. You can replace the entire set via `config.detectors`, or build your own pattern detector from custom `PatternRule`s.
+
+#### Aggregate
+
+`aggregate` combines the per-signal confidences with a probabilistic OR (`1 - product(1 - score_i)`), scaled to `[0,100]`. This lets many weak signals accumulate while staying bounded and avoiding the saturation of a plain sum. Severity is the higher of the score band and the maximum signal severity. The score is mapped to a verdict by the thresholds: at or above `block` gives `block`, at or above `flag` gives `flag`, otherwise `allow`.
+
+#### Optional judge
+
+If a judge is configured and the aggregate score falls within the judge band, the judge is consulted with the raw text. Its `[0,1]` opinion is added as an `external-judge` signal and the result is re-aggregated. Judge IO is fail-safe: any network, status, or parse error (or an abstention) resolves to `null`, and detection proceeds on the local signals alone.
