@@ -1,6 +1,6 @@
 # prompt-injection-detector
 
-A layered detector for prompt-injection and jailbreak attempts in text destined for an LLM. It normalizes the input to defeat common disguises (homoglyphs, zero-width characters, leetspeak), decodes embedded payloads (base64, hex, URL-encoding, decimal char codes, rot13), runs a catalog of pattern rules plus obfuscation and encoding-anomaly heuristics, and combines the resulting signals into a single 0–100 risk score with an `allow` / `flag` / `block` verdict. Detection is entirely local and deterministic; an optional LLM judge can be consulted for borderline scores. The same engine ships as a library, an HTTP API, and a CLI.
+A layered detector for prompt-injection and jailbreak attempts in text destined for an LLM. It normalizes the input to defeat common disguises (homoglyphs, zero-width characters, leetspeak), decodes embedded payloads (base64, hex, URL-encoding, decimal char codes, rot13), runs a catalog of pattern rules plus obfuscation and encoding-anomaly heuristics, and combines the resulting signals into a single 0 to 100 risk score with an `allow` / `flag` / `block` verdict. Detection is entirely local and deterministic; an optional LLM judge can be consulted for borderline scores. The same engine ships as a library, an HTTP API, and a CLI.
 
 This is a heuristic content filter. It produces signals and a recommendation, not a guarantee. See [Limitations](#limitations).
 
@@ -130,8 +130,8 @@ Options:
 | ----------------------- | ------------------------------------------------------------- |
 | `-f, --file <path>`     | Read input from a file instead of an argument.                |
 | `-j, --json`            | Emit the `DetectionResult` as JSON instead of a human report. |
-| `--flag-threshold <n>`  | Score (0–100) at or above which the verdict is `flag`.        |
-| `--block-threshold <n>` | Score (0–100) at or above which the verdict is `block`.       |
+| `--flag-threshold <n>`  | Score (0 to 100) at or above which the verdict is `flag`.        |
+| `--block-threshold <n>` | Score (0 to 100) at or above which the verdict is `block`.       |
 
 Thresholds are validated: each must be a finite number in `[0,100]`, and `--flag-threshold` may not exceed `--block-threshold`. A violation prints an error and exits `64`.
 
@@ -182,9 +182,9 @@ flowchart TD
 
 The default detector set is three detectors:
 
-- **Pattern detector** (`createPatternDetector(defaultRules)`) — the bulk of detection. It matches a catalog of phrase rules against the normalized text and against each decoded layer (re-normalized), and matches rule regexes against the untouched original. Rules span instruction-override, role-confusion, system-exfiltration, delimiter-injection, refusal-suppression, data-exfiltration, code-execution, and obfuscation categories, including multilingual variants. At most one signal is emitted per (rule, source) pair.
-- **Obfuscation detector** — flags inputs whose visible characters were materially disguised, scoring on the fraction of confusable look-alikes plus the count of invisible characters in the original.
-- **Encoding-anomaly detector** — fires when a non-rot13 decode layer surfaced substantial, mostly-printable text that is not already present verbatim in the original, i.e. genuinely smuggled content.
+- **Pattern detector** (`createPatternDetector(defaultRules)`): the bulk of detection. It matches a catalog of phrase rules against the normalized text and against each decoded layer (re-normalized), and matches rule regexes against the untouched original. Rules span instruction-override, role-confusion, system-exfiltration, delimiter-injection, refusal-suppression, data-exfiltration, code-execution, and obfuscation categories, including multilingual variants. At most one signal is emitted per (rule, source) pair.
+- **Obfuscation detector**: flags inputs whose visible characters were materially disguised, scoring on the fraction of confusable look-alikes plus the count of invisible characters in the original.
+- **Encoding-anomaly detector**: fires when a non-rot13 decode layer surfaced substantial, mostly-printable text that is not already present verbatim in the original, i.e. genuinely smuggled content.
 
 Each detector runs in isolation: if one throws, its output is dropped and the others still run. You can replace the entire set via `config.detectors`, or build your own pattern detector from custom `PatternRule`s.
 
@@ -202,7 +202,7 @@ If a judge is configured and the aggregate score falls within the judge band, th
 
 | Field               | Default                                  | Meaning                                                                |
 | ------------------- | ---------------------------------------- | ---------------------------------------------------------------------- |
-| `thresholds`        | `{ flag: 35, block: 70 }`                | Score cutoffs (0–100) mapping the aggregate score to `flag` / `block`. |
+| `thresholds`        | `{ flag: 35, block: 70 }`                | Score cutoffs (0 to 100) mapping the aggregate score to `flag` / `block`. |
 | `detectors`         | pattern + obfuscation + encoding-anomaly | Replace the built-in detector set entirely.                            |
 | `maxEvidenceLength` | `120`                                    | Maximum characters of `evidence` retained per signal.                  |
 | `judge`             | none                                     | An `LlmJudge` consulted only for borderline scores.                    |
@@ -210,14 +210,14 @@ If a judge is configured and the aggregate score falls within the judge band, th
 
 ### Thresholds
 
-`flag` and `block` are on the 0–100 scale. The default `DEFAULT_THRESHOLDS` is `{ flag: 35, block: 70 }`. Raising thresholds reduces false positives at the cost of recall; lowering them does the reverse. The CLI and HTTP API both accept threshold overrides per request.
+`flag` and `block` are on the 0 to 100 scale. The default `DEFAULT_THRESHOLDS` is `{ flag: 35, block: 70 }`. Raising thresholds reduces false positives at the cost of recall; lowering them does the reverse. The CLI and HTTP API both accept threshold overrides per request.
 
 ### Judge
 
 A judge implements `LlmJudge`: `judge(text): Promise<{ score, rationale } | null>` returning a `[0,1]` risk score or `null` to abstain. Two are provided:
 
-- `noopJudge` — always abstains; the default, so the engine runs fully offline.
-- `AnthropicJudge` — calls the Anthropic Messages API. It clamps input length, caps output tokens, and treats any error as abstention.
+- `noopJudge`: always abstains; the default, so the engine runs fully offline.
+- `AnthropicJudge`: calls the Anthropic Messages API. It clamps input length, caps output tokens, and treats any error as abstention.
 
 The CLI and HTTP server select a judge with `resolveJudge(env)`. It returns an `AnthropicJudge` only when **both** `PID_LLM_PROVIDER=anthropic` and `ANTHROPIC_API_KEY` are set, otherwise the `noopJudge`:
 
@@ -254,6 +254,33 @@ pnpm api          # run the HTTP server via tsx
 ```
 
 See `CONTRIBUTING.md` for contribution guidelines.
+
+## Repository map
+
+```text
+src/
+  index.ts        public library exports
+  detector.ts     detect() and createDetector() pipeline
+  normalize.ts    text normalization
+  decode.ts       embedded payload decoding
+  rules.ts        pattern rule catalog
+  detectors.ts    pattern, obfuscation and encoding-anomaly detectors
+  score.ts        signal aggregation and verdict thresholds
+  llm/provider.ts optional LLM judge
+  server.ts       Fastify HTTP API
+  cli.ts          command-line interface
+  types.ts        shared TypeScript types
+test/             Vitest suites and fixtures
+docs/             architecture notes, threat model, diagrams
+vault/            design notes (decisions, glossary, rule taxonomy)
+```
+
+## Documentation
+
+- [Architecture diagram source](docs/architecture.mmd)
+- [Architecture notes](docs/architecture.md)
+- [Full pipeline diagram](docs/diagrams/pipeline.mmd)
+- [Threat model](docs/threat-model.md)
 
 ## License
 

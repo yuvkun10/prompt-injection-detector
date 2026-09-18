@@ -1,0 +1,17 @@
+flowchart TD
+    input["Raw input text"] --> normalize["normalize(): NFKC, strip zero-width and<br/>combining marks, fold confusables,<br/>collapse whitespace, lowercase"]
+    input --> decode["decodeLayers(): rot13, base64, hex,<br/>URL, decimal char codes"]
+    normalize --> ctx["DetectorContext<br/>(original, normalized, decoded)"]
+    decode --> ctx
+    ctx --> pattern["Pattern detector:<br/>phrases vs normalized + decoded layers,<br/>regexes vs original"]
+    ctx --> obf["Obfuscation detector:<br/>confusable / invisible char ratio"]
+    ctx --> enc["Encoding-anomaly detector:<br/>hidden payload in a decode layer"]
+    pattern --> signals["Signals"]
+    obf --> signals
+    enc --> signals
+    signals --> aggregate["aggregate(): probabilistic OR<br/>of signal confidences to 0-100,<br/>map to verdict via thresholds"]
+    aggregate --> band{"score within<br/>judge band and<br/>judge configured?"}
+    band -- no --> result["DetectionResult"]
+    band -- yes --> judge["LLM judge<br/>(adds external-judge signal)"]
+    judge --> reaggregate["re-aggregate"]
+    reaggregate --> result
