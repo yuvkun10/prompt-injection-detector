@@ -7,6 +7,5 @@
 - [usage.md](usage.md): library API and `DetectionResult`, HTTP API, CLI flags and exit codes.
 - [configuration.md](configuration.md): `DetectorConfig` fields, thresholds, judge selection and its environment variables.
 - [limitations.md](limitations.md): known limits of the heuristic approach.
-- [archive/](archive/): earlier README versions kept verbatim. `README-2026-09-19.md` is the README before the restructure.
 
 Design notes in Obsidian format live outside this folder in [`../vault/`](../vault/README.md). Contribution rules are in [`../CONTRIBUTING.md`](../CONTRIBUTING.md).
